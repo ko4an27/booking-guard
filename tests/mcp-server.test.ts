@@ -1,7 +1,9 @@
-import { openSync, closeSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runAllChecks } from "../src/checks.ts";
 import type { Issue } from "../src/checks.ts";
 import { openDb } from "../src/db.ts";
@@ -15,7 +17,7 @@ import {
   MAX_WRONG_CODES,
   PROPOSAL_TTL_MS,
   scrubContactData,
-  showToHumanTerminal,
+  terminalOrFileChannel,
 } from "../src/mcp-server.ts";
 import { generateSeedData, seedDatabase } from "../src/seed.ts";
 
@@ -25,8 +27,9 @@ type Json = Record<string, unknown>;
 let db: Db;
 let client: Client;
 let clock: number;
-/** What the human saw in their terminal. */
+/** What the human was shown, and which proposals' codes are still on display. */
 let humanMessages: string[];
+let onDisplay: Set<string>;
 /** The raw text of every tool result the AI received. */
 let toolResults: string[];
 
@@ -34,11 +37,18 @@ beforeEach(async () => {
   db = openDb(":memory:");
   seedDatabase(db, generateSeedData({ now: new Date(`${TODAY}T12:00:00Z`) }));
   humanMessages = [];
+  onDisplay = new Set();
   toolResults = [];
   clock = Date.parse(`${TODAY}T12:00:00Z`);
   const server = createBookingGuardServer({
     db,
-    showToHuman: (text) => humanMessages.push(text),
+    humanChannel: {
+      show: (id, text) => {
+        humanMessages.push(text);
+        onDisplay.add(id);
+      },
+      clear: (id) => onDisplay.delete(id),
+    },
     secret: new TextEncoder().encode("test-secret"),
     today: () => TODAY,
     now: () => clock,
@@ -316,19 +326,89 @@ describe("helpers", () => {
     expect(describeFailure(new Error("CHECK failed")).message).toMatch(/^Database error: CHECK failed/);
   });
 
-  it("showToHumanTerminal writes to the terminal, or to stderr if there is none — never to stdout", () => {
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    let hasTty = true;
-    try {
-      closeSync(openSync("/dev/tty", "w"));
-    } catch {
-      hasTty = false;
-    }
-    showToHumanTerminal("Confirmation code: ABC123");
-    expect(stdout).not.toHaveBeenCalled();
-    if (!hasTty) expect(stderr).toHaveBeenCalledWith(expect.stringContaining("ABC123"));
-    stdout.mockRestore();
-    stderr.mockRestore();
+});
+
+describe("removing codes that can no longer be used", () => {
+  const propose = async () => (await call("propose_fix", { issueId: firstId("duplicate_booking") }))["proposalId"] as string;
+
+  it("after the fix is applied", async () => {
+    const id = await propose();
+    expect(onDisplay.has(id)).toBe(true);
+    await call("apply_fix", { proposalId: id, confirmationCode: codeFor(id), dryRun: false });
+    expect(onDisplay.has(id)).toBe(false);
+  });
+
+  it("when a newer proposal replaces it", async () => {
+    const oldId = await propose();
+    const newId = await propose();
+    expect([...onDisplay]).toEqual([newId]);
+    expect(oldId).not.toBe(newId);
+  });
+
+  it("after too many wrong codes, and after it expires", async () => {
+    const locked = await propose();
+    for (let i = 0; i < MAX_WRONG_CODES; i++) await call("apply_fix", { proposalId: locked, confirmationCode: "000000", dryRun: false });
+    expect(onDisplay.has(locked)).toBe(false);
+    const expiring = (await call("propose_fix", { issueId: firstId("past_or_cancelled_event") }))["proposalId"] as string;
+    clock += PROPOSAL_TTL_MS + 1;
+    await call("apply_fix", { proposalId: expiring, confirmationCode: codeFor(expiring), dryRun: false });
+    expect(onDisplay.has(expiring)).toBe(false);
+  });
+
+  it("but not after a dry run or a single wrong code", async () => {
+    const id = await propose();
+    await call("apply_fix", { proposalId: id });
+    await call("apply_fix", { proposalId: id, confirmationCode: "000000", dryRun: false });
+    expect(onDisplay.has(id)).toBe(true);
+  });
+});
+
+describe("terminalOrFileChannel", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "bg-channel-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("without a terminal: writes pending/CONFIRM-<id>.txt (owner-only) and removes it on clear", () => {
+    const pending = join(dir, "pending");
+    const channel = terminalOrFileChannel(pending, { ttyPath: join(dir, "no-such-dir", "tty") });
+    channel.show("P-12345678", "Confirmation code: ABC123");
+    const file = join(pending, "CONFIRM-P-12345678.txt");
+    expect(readFileSync(file, "utf8")).toContain("ABC123");
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    channel.clear("P-12345678");
+    expect(existsSync(file)).toBe(false);
+    expect(() => channel.clear("P-12345678")).not.toThrow(); // clearing twice is fine
+  });
+
+  it("with a terminal: writes there and creates no file", () => {
+    const tty = join(dir, "fake-tty");
+    writeFileSync(tty, "");
+    const pending = join(dir, "pending");
+    terminalOrFileChannel(pending, { ttyPath: tty }).show("P-1", "Confirmation code: ABC123");
+    expect(readFileSync(tty, "utf8")).toContain("ABC123");
+    expect(existsSync(pending)).toBe(false);
+  });
+});
+
+describe("apply_fix trusts only the proposal stored on the server", () => {
+  it("ignores any proposal data the AI sends along with the id", async () => {
+    const id = (await call("propose_fix", { issueId: firstId("duplicate_booking") }))["proposalId"] as string;
+    const before = snapshot();
+    // An edited fix smuggled in as extra arguments: the tool's input schema only has proposalId,
+    // confirmationCode and dryRun, so the rest is dropped before our code even runs.
+    const res = await call("apply_fix", {
+      proposalId: id,
+      confirmationCode: codeFor(id),
+      dryRun: false,
+      changes: [{ op: "archive_booking", bookingId: 1, reason: "duplicate" }],
+      fix: { changes: [{ op: "archive_booking", bookingId: 1, reason: "duplicate" }] },
+    });
+    expect(res["status"]).toBe("applied");
+    const after = db.prepare("SELECT archived_at FROM bookings WHERE id = 1").get() as { archived_at: string | null };
+    const wasBooking1InFix = (res["changes"] as Array<{ bookingId: number }>).some((c) => c.bookingId === 1);
+    if (!wasBooking1InFix) expect(after.archived_at).toBeNull();
+    expect(snapshot()).not.toEqual(before);
   });
 });
