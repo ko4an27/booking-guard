@@ -139,15 +139,18 @@ function makeCustomer(rng: Rng, n: number): CustomerRow {
  * Builds the whole fake dataset in memory. Pure: the same `now` and `rngSeed` give the same result.
  * Dates are relative to `now`, so "past" and "future" events stay correct whenever you re-seed.
  */
-export function generateSeedData(options: { now: Date; rngSeed?: number }): SeedData {
+export function generateSeedData(options: { now: Date; rngSeed?: number; clean?: boolean }): SeedData {
   const rngSeed = options.rngSeed ?? DEFAULT_RNG_SEED;
+  // clean: true builds the same kind of data with NO deliberate errors (used to test for false positives).
+  const clean = options.clean ?? false;
+  const n = (planned: number): number => (clean ? 0 : planned);
   const rng = createRng(rngSeed);
   const now = options.now;
   const today = startOfUtcDay(now);
 
   // --- Customers: good ones plus one bad one per BAD_CONTACTS entry, mixed so bad ids aren't all at the end.
   const good = Array.from({ length: GOOD_CUSTOMERS }, (_, i) => makeCustomer(rng, i + 1));
-  const bad = BAD_CONTACTS.map((breakIt, i) => {
+  const bad = (clean ? [] : BAD_CONTACTS).map((breakIt, i) => {
     const c = makeCustomer(rng, GOOD_CUSTOMERS + i + 1);
     return { ...c, ...breakIt(c) };
   });
@@ -156,7 +159,7 @@ export function generateSeedData(options: { now: Date; rngSeed?: number }): Seed
   const goodIds = good.map((c) => c.id);
 
   // --- Events: give each of the 40 events a role, then create them city by city.
-  const roles: EventRole[] = rng.shuffle([
+  const plannedRoles: EventRole[] = rng.shuffle([
     ...ERROR_PLAN.pastEventBookings.map((): EventRole => "past"),
     ...ERROR_PLAN.cancelledEventBookings.map((): EventRole => "cancelled"),
     ...Array.from({ length: ERROR_PLAN.emptyCancelledEvents }, (): EventRole => "cancelledEmpty"),
@@ -174,6 +177,7 @@ export function generateSeedData(options: { now: Date; rngSeed?: number }): Seed
       (): EventRole => "clean",
     ),
   ));
+  const roles = clean ? plannedRoles.map((): EventRole => "clean") : plannedRoles;
 
   const slots = generateTimeSlots();
   const states: EventState[] = [];
@@ -242,13 +246,13 @@ export function generateSeedData(options: { now: Date; rngSeed?: number }): Seed
   };
 
   // 1. Duplicate: the same customer books the same event again, in a different free slot.
-  for (let i = 0; i < ERROR_PLAN.duplicateBookings; i++) {
+  for (let i = 0; i < n(ERROR_PLAN.duplicateBookings); i++) {
     const s = cleanWithRoom();
     add(s, takeUntouched(s).customer_id, freeSlot(s));
   }
 
   // 2. Double-booked slot: a different customer gets a slot that is already taken.
-  for (let i = 0; i < ERROR_PLAN.doubleBookedSlots; i++) {
+  for (let i = 0; i < n(ERROR_PLAN.doubleBookedSlots); i++) {
     const s = cleanWithRoom();
     const original = takeUntouched(s);
     const stranger = rng.pick(goodIds.filter((id) => !s.customerIds.has(id)));
@@ -267,19 +271,19 @@ export function generateSeedData(options: { now: Date; rngSeed?: number }): Seed
     .map((b, i) => ({ id: i + 1, ...b }));
 
   const events = states.map((s) => s.event);
-  const past = ERROR_PLAN.pastEventBookings.reduce((a, b) => a + b, 0);
-  const cancelled = ERROR_PLAN.cancelledEventBookings.reduce((a, b) => a + b, 0);
+  const past = clean ? 0 : ERROR_PLAN.pastEventBookings.reduce((a, b) => a + b, 0);
+  const cancelled = clean ? 0 : ERROR_PLAN.cancelledEventBookings.reduce((a, b) => a + b, 0);
 
   const expected: ExpectedErrors = {
     rngSeed,
     totals: { cities: CITIES.length, events: events.length, customers: customers.length, bookings: bookings.length },
     errors: {
       duplicateBookings: {
-        count: ERROR_PLAN.duplicateBookings,
+        count: n(ERROR_PLAN.duplicateBookings),
         counts: "(customer, event) pairs with more than one booking",
       },
       doubleBookedSlots: {
-        count: ERROR_PLAN.doubleBookedSlots,
+        count: n(ERROR_PLAN.doubleBookedSlots),
         counts: "(event, slot) pairs with more than one booking",
       },
       pastOrCancelledEvents: {
@@ -295,7 +299,7 @@ export function generateSeedData(options: { now: Date; rngSeed?: number }): Seed
         phoneRule: "after removing spaces: ^\\+358\\d{7,10}$",
       },
       overbookedEvents: {
-        count: ERROR_PLAN.overbookedEvents,
+        count: n(ERROR_PLAN.overbookedEvents),
         counts: "events with more bookings than capacity",
       },
     },
