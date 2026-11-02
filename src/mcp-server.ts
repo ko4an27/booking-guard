@@ -1,8 +1,8 @@
 // Booking Guard MCP server: lets Claude Code list issues, propose fixes and (with a human's code) apply them.
 // Run with `npm run mcp`; Claude Code starts it automatically through .mcp.json.
 import { createHmac, randomBytes } from "node:crypto";
-import { existsSync, openSync, writeSync, closeSync } from "node:fs";
-import { resolve } from "node:path";
+import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -14,6 +14,9 @@ import type { Db } from "./db.ts";
 import { applyFix, confirmationCode, FixError, proposeFix } from "./fixes.ts";
 import type { FixProposal } from "./fixes.ts";
 import { maskEmail, maskPhone } from "./mask.ts";
+
+/** The project folder (one level above src/), wherever the server is started from. */
+const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 export const PROPOSAL_TTL_MS = 15 * 60 * 1000;
 export const MAX_WRONG_CODES = 3;
@@ -53,22 +56,39 @@ export function scrubContactData(text: string): string {
     .replace(/\+358[\d ]{6,14}\d/g, (m) => maskPhone(m));
 }
 
-// ---------- The human-only channel for confirmation codes ----------
+// ---------- The human channel for confirmation codes ----------
+
+/** Where confirmation codes go. Never into a tool result. */
+export interface HumanChannel {
+  show(proposalId: string, text: string): void;
+  /** The proposal is used up, replaced, expired or locked: remove its code. */
+  clear(proposalId: string): void;
+}
 
 /**
- * Shows text to the human, never to the AI. Writes straight to the terminal (/dev/tty), which
- * the AI can't read back; if there is no terminal, falls back to stderr. Tool results go over
- * stdout, so neither channel ends up in what Claude sees.
+ * Terminal first: on a local machine the code is written straight to /dev/tty, the human's screen.
+ * Without a terminal (e.g. Claude Code on the web) it goes to pending/CONFIRM-<proposalId>.txt,
+ * which the human opens. That file is local, so an AI with shell access COULD read it — this code
+ * is defense in depth; the hard guarantee is the permission prompt on apply_fix (see README).
  */
-export function showToHumanTerminal(text: string): void {
-  const message = `\n${text}\n`;
-  try {
-    const fd = openSync("/dev/tty", "w");
-    writeSync(fd, message);
-    closeSync(fd);
-  } catch {
-    process.stderr.write(message);
-  }
+export function terminalOrFileChannel(pendingDir: string, options: { ttyPath?: string } = {}): HumanChannel {
+  const ttyPath = options.ttyPath ?? "/dev/tty";
+  const file = (proposalId: string) => join(pendingDir, `CONFIRM-${proposalId}.txt`);
+  return {
+    show(proposalId, text) {
+      try {
+        const fd = openSync(ttyPath, "a");
+        writeSync(fd, `\n${text}\n`);
+        closeSync(fd);
+      } catch {
+        mkdirSync(pendingDir, { recursive: true });
+        writeFileSync(file(proposalId), `${text}\n`, { mode: 0o600 }); // readable by the owner only
+      }
+    },
+    clear(proposalId) {
+      rmSync(file(proposalId), { force: true });
+    },
+  };
 }
 
 // ---------- The server ----------
@@ -85,8 +105,8 @@ interface StoredProposal {
 
 export interface ServerOptions {
   db: Db;
-  /** Where confirmation codes are shown. Default: the human's terminal. */
-  showToHuman?: (text: string) => void;
+  /** Where confirmation codes are shown. Default: the terminal, else pending/CONFIRM-<id>.txt. */
+  humanChannel?: HumanChannel;
   /** Secret for confirmation codes. Default: 32 random bytes, kept in memory only. */
   secret?: Uint8Array;
   today?: () => string;
@@ -102,12 +122,17 @@ function result(value: unknown): ToolResult {
 
 export function createBookingGuardServer(options: ServerOptions): McpServer {
   const { db } = options;
-  const showToHuman = options.showToHuman ?? showToHumanTerminal;
+  const human = options.humanChannel ?? terminalOrFileChannel(join(PROJECT_ROOT, "pending"));
   const secret = options.secret ?? randomBytes(32);
   const today = options.today ?? (() => todayUtc());
   const now = options.now ?? (() => Date.now());
   // Proposals live here, on the server. apply_fix takes only an id, so the AI can't send back an edited fix.
   const proposals = new Map<string, StoredProposal>();
+  /** Forget a proposal and remove its code, so it can never be used again. */
+  const drop = (id: string): void => {
+    proposals.delete(id);
+    human.clear(id);
+  };
 
   const server = new McpServer({ name: "booking-guard", version: "0.1.0" });
 
@@ -158,7 +183,7 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
       title: "Propose a fix",
       description:
         "Describes how to fix one issue (by issueId from list_issues). Changes nothing. If the fix can be applied, " +
-        "a confirmation code is shown to the HUMAN in their terminal — it is not part of this result. " +
+        "a confirmation code is shown to the HUMAN only (terminal, or a file in pending/) — it is not part of this result. " +
         "Ask the human for the code, then call apply_fix.",
       inputSchema: { issueId: z.string().describe("The issueId from list_issues.") },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -170,7 +195,7 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
 
       const fix = proposeFix(db, issue, { today: today() });
       // A new proposal replaces any older one for the same issue, so an old code can't be used.
-      for (const [id, p] of proposals) if (p.issueId === wanted) proposals.delete(id);
+      for (const [id, p] of proposals) if (p.issueId === wanted) drop(id);
       if (!fix.fixable) return result({ issueId: wanted, found: true, fixable: false, summary: fix.summary, issue: maskIssue(issue) });
 
       const id = `P-${randomBytes(4).toString("hex")}`;
@@ -179,7 +204,8 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
       const stored: StoredProposal = { id, issueId: wanted, fix, key, expiresAt: now() + PROPOSAL_TTL_MS, wrongCodes: 0 };
       proposals.set(id, stored);
 
-      showToHuman(
+      human.show(
+        id,
         [
           "── Booking Guard: confirmation needed ──",
           `Proposal ${id} (${wanted})`,
@@ -197,8 +223,10 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
         summary: fix.summary,
         changes: fix.changes,
         expiresAt: new Date(stored.expiresAt).toISOString(),
-        confirmationCode: "shown to the human in their terminal — not included here",
-        next: "Ask the human for the confirmation code. Then call apply_fix with proposalId, confirmationCode and dryRun: false.",
+        confirmationCode: `shown to the human only (their terminal, or pending/CONFIRM-${id}.txt) — not included here`,
+        next:
+          "Ask the human for the confirmation code. Do not read the pending/ file yourself. " +
+          "Then call apply_fix with proposalId, confirmationCode and dryRun: false.",
       });
     },
   );
@@ -213,7 +241,7 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
         "was shown. Runs in one transaction and writes audit_log; on any error nothing is changed.",
       inputSchema: {
         proposalId: z.string().describe("The proposalId from propose_fix."),
-        confirmationCode: z.string().optional().describe("The code the human read in their terminal."),
+        confirmationCode: z.string().optional().describe("The code the human gave you."),
         dryRun: z.boolean().optional().describe("Default true: only show what would change."),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -222,7 +250,7 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
       const stored = proposals.get(proposalId);
       if (!stored) return result({ proposalId, status: "rejected", reason: "unknown_or_replaced_proposal", message: "Call propose_fix again." });
       if (now() > stored.expiresAt) {
-        proposals.delete(proposalId);
+        drop(proposalId);
         return result({ proposalId, status: "rejected", reason: "expired", message: "Call propose_fix again." });
       }
       if (dryRun ?? true) return result({ proposalId, ...applyFix(db, stored.fix) });
@@ -233,13 +261,13 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
         outcome = applyFix(db, stored.fix, { dryRun: false, secret: stored.key, ...(code === undefined ? {} : { confirmationCode: code }) });
       } catch (error) {
         // applyFix has already rolled back. The proposal is stale, so it can't be retried.
-        proposals.delete(proposalId);
+        drop(proposalId);
         return result({ proposalId, ...describeFailure(error) });
       }
       if (outcome.status === "rejected") {
         stored.wrongCodes++;
         // 6 characters can be guessed with enough tries, so a proposal is locked after a few wrong codes.
-        if (stored.wrongCodes >= MAX_WRONG_CODES) proposals.delete(proposalId);
+        if (stored.wrongCodes >= MAX_WRONG_CODES) drop(proposalId);
         return result({
           proposalId,
           status: "rejected",
@@ -248,7 +276,7 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
         });
       }
       // Applied: the proposal is used up and can never be applied again.
-      proposals.delete(proposalId);
+      drop(proposalId);
       return result({ proposalId, ...outcome });
     },
   );
@@ -266,8 +294,7 @@ export function describeFailure(error: unknown): { status: "failed"; message: st
 
 async function main(): Promise<void> {
   // Resolve the database relative to the project, not to whatever folder Claude Code starts us in.
-  const projectRoot = fileURLToPath(new URL("..", import.meta.url));
-  const dbPath = process.env["BOOKING_GUARD_DB"] ?? resolve(projectRoot, DEFAULT_DB_PATH);
+  const dbPath = process.env["BOOKING_GUARD_DB"] ?? resolve(PROJECT_ROOT, DEFAULT_DB_PATH);
   if (!existsSync(dbPath)) {
     process.stderr.write(`booking-guard: no database at ${dbPath}. Run \`npm run seed\` first.\n`);
     process.exit(1);

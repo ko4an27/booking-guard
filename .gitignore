@@ -5,3 +5,4 @@ dist/
 drafts/*
 !drafts/.gitkeep
 data/
+pending/
