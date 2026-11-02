@@ -3,7 +3,7 @@
 Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 
 ## Plan
-- [ ] Mon 2.11 — setup: repo, CLAUDE.md, package.json, TypeScript, vitest, first commit
+- [x] Mon 2.11 — setup: repo, CLAUDE.md, package.json, TypeScript, vitest, first commit
 - [ ] Mon 2.11 — database schema + `seed` with deliberate errors
 - [ ] Tue 3.11 — 5 SQL checks + tests (each finds exactly the seeded errors, no false positives)
 - [ ] Tue 3.11 — `proposeFix` / `applyFix` with transaction, rollback test, dry-run, confirmation code
@@ -13,7 +13,11 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - [ ] Thu 5.11 — CV + cover letter, submit application
 
 ## Done
+- Project setup: package.json (ESM), strict tsconfig, vitest, better-sqlite3, src/ tests/ drafts/, smoke test passing (2/2), typecheck clean.
 
 ## Next
+- Merge the "Project setup" PR.
+- Database schema + `seed` with deliberate errors.
 
 ## Open questions
+- `seed` / `check` / `mcp` scripts from CLAUDE.md are not in package.json yet — they'll be added with the code they run.
