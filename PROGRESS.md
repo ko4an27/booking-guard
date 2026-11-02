@@ -22,13 +22,16 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - MCP server (`src/mcp-server.ts`, `npm run mcp`, `.mcp.json`): `list_issues` (optional city), `propose_fix`, `apply_fix`. Proposals are stored on the server and referenced by id; each has its own key, expires after 15 min, is single-use, is replaced by a newer proposal for the same issue, and locks after 3 wrong codes. Codes are shown to the human (/dev/tty, else stderr), never in a tool result. All results masked plus a final scrub. `apply_fix` is an `ask` rule in `.claude/settings.json`. 141 tests passing.
 - Without a terminal (Claude Code on the web) the code goes to `pending/CONFIRM-<proposalId>.txt` (git-ignored, owner-only) and is removed when the proposal is used, replaced, expired or locked. README states the safety model honestly. Project `.mcp.json` loads in the cloud session (`list_issues` for Turku works). 147 tests passing.
 - Message drafts (`src/messages.ts`, MCP tool `draft_messages`): one FI + EN draft per affected customer in `drafts/`, first name only, masked contact data in the header, nothing sent. `message_drafts` table makes re-runs create nothing new. Skill `.claude/skills/morning-booking-check/SKILL.md`. Demo on Turku: 3 duplicates proposed, stopped before apply. 161 tests passing.
+- Packaging: README for hiring managers (Mermaid flow, quick start, checks, tools, "How it stays reliable", "Limitations"), GitHub Actions CI (Node 22: npm ci, typecheck, test) with badge, MIT LICENSE (Andrii Kochniev).
+- `docs/demo.md`: real morning check on Turku in Claude Code on the web — 3 duplicates proposed, approved, applied one by one (audit_log rows 2–4); Turku now 0 issues, all cities 48. Web limitation recorded: no terminal, so the codes were read with an approved `cat`.
 
 ## Next
-- Merge PR #7 (pending-file fallback, missed from #6), then the drafts + skill PR. Re-run `npm run seed` afterwards (new `message_drafts` table).
-- Start a NEW session after merging, so its MCP server runs the new code; run the morning check there with real approvals.
-- Thu 5.11: README ("How it stays reliable"), GitHub Actions CI, GIF demo.
+- Merge PR #9 (drafts + skill: PR #8 landed in its stacked base, not in main), then the packaging PR.
+- Thu 5.11: GIF demo, CV + cover letter.
 
 ## Decisions
+- Drafts keep the generic "Asiakaspalvelu / Customer service" signature (fine for a demo).
+- Stacked PRs: always target `main` (twice a stacked PR was merged into its base branch instead of main).
 - zod is OK (needed by the MCP SDK).
 - No terminal → code goes to `pending/CONFIRM-<proposalId>.txt`. `apply_fix` looks up proposals on the server by id only.
 - Double-booked slot = two different customers in one slot (the same customer twice = duplicate only).
@@ -39,8 +42,9 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - Double-booked: move to the earliest free slot; those customers get a message.
 
 ## Open questions
+- In Claude Code on the web the human can't open `pending/` files, so the code ends up readable by the AI (approved `cat`). Better human-only channel for web sessions?
+- `draft_messages` wasn't callable in the demo session (tool list cached at session start). Re-run the demo with drafts (e.g. on a city with moves) in a fresh session?
 - The pending/ file is readable by an AI with shell access: the code is defense in depth; the permission prompt on `apply_fix` (and Bash on prompt) is the hard guarantee. Documented in README.
 - An already running MCP server keeps its old code until the session restarts it. This session's server is from before the pending-file fallback and `draft_messages`.
-- Drafts say "reply to this message" and sign as "Asiakaspalvelu / Customer service". Add a real contact line (phone hours, address of the event venue)? The schema only has the city, no venue.
 - Does `disableBypassPermissionsMode` work from project settings? The docs don't say; the `ask` rule itself is documented to apply even over a user-level `allow`.
 - Seed dates are relative to the day you run it: re-run `npm run seed` before a demo so "future" events are still in the future.
