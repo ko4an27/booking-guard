@@ -18,19 +18,23 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - `npm run seed`: 40 events in 8 cities, 331 customers, 513 bookings; seeded errors: 12 duplicates, 9 double-booked slots, 15 bookings on past/cancelled events (7 + 8), 11 bad contacts, 4 overbooked events. Counts in `tests/expected.json`. 35 tests passing.
 - Checks (`src/checks.ts`): 5 SQL queries (JOIN / GROUP BY) returning typed issues; find exactly the 12 / 9 / 15 / 11 / 4 seeded errors, zero on a clean database and on near-miss cases. `npm run check` prints a masked summary (`src/report.ts`, `src/mask.ts`). 82 tests passing.
 - Fixes (`src/fixes.ts`): `proposeFix` (read-only) and `applyFix` (dry-run by default, confirmation code, one transaction, one audit_log row per change). Bookings are archived (`archived_at`, `archive_reason`), never deleted; checks ignore archived bookings. Rollback tested for 3 kinds of mid-fix failure. 110 tests passing.
+- Fix decisions of 4.11: confirmation code is an HMAC (secret key in memory) of the exact proposal and is no longer part of the proposal or the audit_log; overbooked customers move to the next event in the same city with room, otherwise waitlist (`bookings.waitlisted_at`); moved/waitlisted customers are flagged `needsMessage` in audit_log. 119 tests passing.
 
 ## Next
-- Merge the "Fixes" PR. Re-run `npm run seed` afterwards (new booking columns).
-- Wed 4.11: MCP server with `list_issues`, `propose_fix`, `apply_fix`.
+- Merge the "Fix decisions" PR. Re-run `npm run seed` afterwards (new `waitlisted_at` column).
+- Wed 4.11: MCP server with `list_issues`, `propose_fix`, `apply_fix` (code shown to the human only; `apply_fix` never auto-allowed).
+- Wed 4.11: message drafts for audit_log rows with `needsMessage: true`.
 
 ## Decisions
 - Double-booked slot = two different customers in one slot (the same customer twice = duplicate only).
 - Duplicates count toward capacity.
 - Past-event bookings are a problem; the fix ARCHIVES them, never deletes. (All fixes archive or move — nothing is ever deleted.)
+- Confirmation code never goes back to the AI: `propose_fix` shows it only to the human; it is tied to the exact proposal, so a changed fix needs a new code. `apply_fix` stays behind a Claude Code permission prompt (never auto-allowed).
+- Overbooked: never archive. Move to the next event in the same city with free capacity; if none, waitlist. Those customers get a message.
+- Double-booked: move to the earliest free slot; those customers get a message.
 
 ## Open questions
-- MCP: the confirmation code is returned by `propose_fix`, so the AI could pass it straight to `apply_fix`. Should the code only be shown to the human (e.g. `apply_fix` behind a Claude Code permission prompt)?
-- Overbooked fix archives the most recently made bookings. OK, or should those customers be moved to another event instead?
-- Double-booked fix moves the later booking to the earliest free slot. Those customers will need a message (Wed drafts).
+- MCP (Wed): Claude Code doesn't show an MCP server's stderr in the conversation — it goes to the MCP log, which the human may not watch and the AI could read with Bash. Which channel shows the code to the human only? To decide before building `propose_fix`.
+- MCP (Wed): `apply_fix` should look up the proposal on the server by id instead of trusting proposal JSON sent back by the AI.
 - Seed dates are relative to the day you run it: re-run `npm run seed` before a demo so "future" events are still in the future.
-- `seed` / `check` / `mcp` scripts from CLAUDE.md are not in package.json yet — they'll be added with the code they run.
+- `mcp` script from CLAUDE.md is not in package.json yet — it will be added with the MCP server.
