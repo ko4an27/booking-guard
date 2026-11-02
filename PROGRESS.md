@@ -20,6 +20,7 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - Fixes (`src/fixes.ts`): `proposeFix` (read-only) and `applyFix` (dry-run by default, confirmation code, one transaction, one audit_log row per change). Bookings are archived (`archived_at`, `archive_reason`), never deleted; checks ignore archived bookings. Rollback tested for 3 kinds of mid-fix failure. 110 tests passing.
 - Fix decisions of 4.11: confirmation code is an HMAC (secret key in memory) of the exact proposal and is no longer part of the proposal or the audit_log; overbooked customers move to the next event in the same city with room, otherwise waitlist (`bookings.waitlisted_at`); moved/waitlisted customers are flagged `needsMessage` in audit_log. 119 tests passing.
 - MCP server (`src/mcp-server.ts`, `npm run mcp`, `.mcp.json`): `list_issues` (optional city), `propose_fix`, `apply_fix`. Proposals are stored on the server and referenced by id; each has its own key, expires after 15 min, is single-use, is replaced by a newer proposal for the same issue, and locks after 3 wrong codes. Codes are shown to the human (/dev/tty, else stderr), never in a tool result. All results masked plus a final scrub. `apply_fix` is an `ask` rule in `.claude/settings.json`. 141 tests passing.
+- Without a terminal (Claude Code on the web) the code goes to `pending/CONFIRM-<proposalId>.txt` (git-ignored, owner-only) and is removed when the proposal is used, replaced, expired or locked. README states the safety model honestly. Project `.mcp.json` loads in the cloud session (`list_issues` for Turku works). 147 tests passing.
 
 ## Next
 - Merge the "Fix decisions" PR (#5), then the MCP PR. Re-run `npm run seed` afterwards.
@@ -27,6 +28,8 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - Wed 4.11: message drafts for audit_log rows with `needsMessage: true`.
 
 ## Decisions
+- zod is OK (needed by the MCP SDK).
+- No terminal → code goes to `pending/CONFIRM-<proposalId>.txt`. `apply_fix` looks up proposals on the server by id only.
 - Double-booked slot = two different customers in one slot (the same customer twice = duplicate only).
 - Duplicates count toward capacity.
 - Past-event bookings are a problem; the fix ARCHIVES them, never deletes. (All fixes archive or move — nothing is ever deleted.)
@@ -35,8 +38,7 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - Double-booked: move to the earliest free slot; those customers get a message.
 
 ## Open questions
-- Where does the code actually show up in Claude Code? The server writes to /dev/tty (straight to the terminal) and falls back to stderr. Not testable here (no terminal in the cloud container); check on your machine. If /dev/tty garbles the Claude Code screen, we need another human-only channel.
-- The code protects the MCP path only. If Claude may run Bash with `node` or `sqlite3`, it could change the database directly; keep Bash on prompt for this project.
+- The pending/ file is readable by an AI with shell access: the code is defense in depth; the permission prompt on `apply_fix` (and Bash on prompt) is the hard guarantee. Documented in README.
+- An already running MCP server keeps its old code until the session restarts it.
 - Does `disableBypassPermissionsMode` work from project settings? The docs don't say; the `ask` rule itself is documented to apply even over a user-level `allow`.
-- `zod` was added as a dependency: the MCP SDK needs it for tool input schemas (peer dependency). OK?
 - Seed dates are relative to the day you run it: re-run `npm run seed` before a demo so "future" events are still in the future.
