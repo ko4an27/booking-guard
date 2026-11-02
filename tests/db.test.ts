@@ -20,8 +20,8 @@ const addEvent = (overrides: Record<string, unknown> = {}) =>
     .run({ city: "Oulu", date: "2026-12-01", time_slots: '["10:00","10:20"]', capacity: 10, status: "scheduled", ...overrides });
 
 describe("schema", () => {
-  it("creates the four tables", () => {
-    expect(tables()).toEqual(["audit_log", "bookings", "customers", "events"]);
+  it("creates the five tables", () => {
+    expect(tables()).toEqual(["audit_log", "bookings", "customers", "events", "message_drafts"]);
   });
 
   it("can be created twice without error", () => {

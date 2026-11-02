@@ -14,6 +14,7 @@ import type { Db } from "./db.ts";
 import { applyFix, confirmationCode, FixError, proposeFix } from "./fixes.ts";
 import type { FixProposal } from "./fixes.ts";
 import { maskEmail, maskPhone } from "./mask.ts";
+import { draftMessages } from "./messages.ts";
 
 /** The project folder (one level above src/), wherever the server is started from. */
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -111,6 +112,8 @@ export interface ServerOptions {
   secret?: Uint8Array;
   today?: () => string;
   now?: () => number;
+  /** Where message drafts are written. Default: drafts/ in the project. */
+  draftsDir?: string;
 }
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
@@ -278,6 +281,28 @@ export function createBookingGuardServer(options: ServerOptions): McpServer {
       // Applied: the proposal is used up and can never be applied again.
       drop(proposalId);
       return result({ proposalId, ...outcome });
+    },
+  );
+
+  // ----- draft_messages -----
+  server.registerTool(
+    "draft_messages",
+    {
+      title: "Write customer message drafts",
+      description:
+        "For every applied change that affects a customer (moved slot, moved event, waitlist) and has no draft yet, " +
+        "writes ONE draft per customer to drafts/, in Finnish and English. Files only — nothing is ever sent. " +
+        "Running it again creates nothing new.",
+      inputSchema: {},
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    () => {
+      const run = draftMessages(db, { draftsDir: options.draftsDir ?? join(PROJECT_ROOT, "drafts") });
+      return result({
+        created: run.created.map((d) => ({ customerId: d.customerId, file: `drafts/${d.file}`, changes: d.auditLogIds.length })),
+        alreadyDrafted: run.alreadyDrafted,
+        note: "Drafts are files only. Nothing was sent.",
+      });
     },
   );
 
