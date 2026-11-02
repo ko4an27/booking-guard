@@ -32,7 +32,13 @@ export interface BookingRow {
   slot: string;
   /** ISO 8601 timestamp. */
   created_at: string;
+  /** When a fix archived this booking; null = active. Bookings are archived, never deleted. */
+  archived_at: string | null;
+  archive_reason: ArchiveReason | null;
 }
+
+export const ARCHIVE_REASONS = ["duplicate", "past_event", "cancelled_event", "overbooked"] as const;
+export type ArchiveReason = (typeof ARCHIVE_REASONS)[number];
 
 export interface AuditLogRow {
   id: number;
@@ -68,7 +74,11 @@ CREATE TABLE IF NOT EXISTS bookings (
   event_id    INTEGER NOT NULL REFERENCES events(id),
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   slot        TEXT    NOT NULL CHECK (slot GLOB '[0-2][0-9]:[0-5][0-9]'),
-  created_at  TEXT    NOT NULL
+  created_at  TEXT    NOT NULL,
+  archived_at    TEXT,
+  archive_reason TEXT CHECK (archive_reason IN ('duplicate', 'past_event', 'cancelled_event', 'overbooked')),
+  -- Both set (archived) or both empty (active): an archived booking always says why.
+  CHECK ((archived_at IS NULL) = (archive_reason IS NULL))
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_bookings_event    ON bookings(event_id);

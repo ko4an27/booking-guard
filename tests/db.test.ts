@@ -84,3 +84,29 @@ describe("schema", () => {
     expect(() => db.prepare("INSERT INTO audit_log (action, details) VALUES ('test', 'not json')").run()).toThrow();
   });
 });
+
+describe("booking archive columns", () => {
+  beforeEach(() => {
+    addEvent();
+    db.prepare("INSERT INTO customers (name) VALUES ('Test Person')").run();
+  });
+  const insert = (archivedAt: string | null, reason: string | null) =>
+    db
+      .prepare("INSERT INTO bookings (event_id, customer_id, slot, created_at, archived_at, archive_reason) VALUES (1, 1, '10:00', 'x', ?, ?)")
+      .run(archivedAt, reason);
+
+  it("new bookings are active (not archived)", () => {
+    insert(null, null);
+    expect(db.prepare("SELECT archived_at, archive_reason FROM bookings").get()).toEqual({ archived_at: null, archive_reason: null });
+  });
+  it("accepts an archived booking with a known reason", () => {
+    expect(insert("2026-11-03T00:00:00Z", "past_event").changes).toBe(1);
+  });
+  it.each([
+    ["a reason but no time", null, "duplicate"],
+    ["a time but no reason", "2026-11-03T00:00:00Z", null],
+    ["an unknown reason", "2026-11-03T00:00:00Z", "deleted"],
+  ])("rejects %s", (_label, at, reason) => {
+    expect(() => insert(at, reason)).toThrow();
+  });
+});

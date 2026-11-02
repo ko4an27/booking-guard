@@ -149,3 +149,18 @@ describe("issue details", () => {
     ]);
   });
 });
+
+describe("archived bookings", () => {
+  it("are ignored by every check", () => {
+    const d = seeded();
+    d.exec("UPDATE bookings SET archived_at = '2026-11-03T00:00:00Z', archive_reason = 'duplicate'");
+    const results = runAllChecks(d, TODAY);
+    expect(results.duplicateBookings).toEqual([]);
+    expect(results.doubleBookedSlots).toEqual([]);
+    expect(results.pastOrCancelledEvents).toEqual([]);
+    expect(results.overbookedEvents).toEqual([]);
+    // Bad contacts are about customers, so they are still found — now with 0 active bookings.
+    expect(results.badContacts).toHaveLength(expected.errors.badContacts.count);
+    for (const i of results.badContacts) expect(i.bookingCount).toBe(0);
+  });
+});
