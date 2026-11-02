@@ -76,7 +76,8 @@ export function todayUtc(now: Date = new Date()): string {
 
 const ids = (json: string): number[] => JSON.parse(json) as number[];
 
-// Every check looks at ACTIVE bookings only: a booking archived by a fix is no longer a problem.
+// Checks 1, 2, 3 and 5 look at ACTIVE bookings only: archived and waitlisted bookings hold no slot or place.
+// Check 4 counts every booking that isn't archived — waitlisted customers still need working contact data.
 
 // ---------- 1. Duplicate bookings ----------
 
@@ -88,7 +89,7 @@ export function checkDuplicateBookings(db: Db): DuplicateBookingIssue[] {
          FROM bookings b
          JOIN events e    ON e.id = b.event_id
          JOIN customers c ON c.id = b.customer_id
-        WHERE b.archived_at IS NULL
+        WHERE b.archived_at IS NULL AND b.waitlisted_at IS NULL
         GROUP BY b.event_id, b.customer_id
        HAVING COUNT(*) > 1
         ORDER BY b.event_id, b.customer_id`,
@@ -117,7 +118,7 @@ export function checkDoubleBookedSlots(db: Db): DoubleBookedSlotIssue[] {
               json_group_array(b.customer_id ORDER BY b.id) AS customer_ids
          FROM bookings b
          JOIN events e ON e.id = b.event_id
-        WHERE b.archived_at IS NULL
+        WHERE b.archived_at IS NULL AND b.waitlisted_at IS NULL
         GROUP BY b.event_id, b.slot
        HAVING COUNT(DISTINCT b.customer_id) > 1
         ORDER BY b.event_id, b.slot`,
@@ -144,7 +145,7 @@ export function checkPastOrCancelledEvents(db: Db, today: string): PastOrCancell
       `SELECT b.id AS booking_id, b.customer_id, e.id AS event_id, e.city, e.date, e.status
          FROM bookings b
          JOIN events e ON e.id = b.event_id
-        WHERE b.archived_at IS NULL
+        WHERE b.archived_at IS NULL AND b.waitlisted_at IS NULL
           AND (e.date < @today OR e.status = 'cancelled')
         ORDER BY b.id`,
     )
@@ -197,7 +198,7 @@ export function checkOverbookedEvents(db: Db): OverbookedEventIssue[] {
     .prepare(
       `SELECT e.id, e.city, e.date, e.capacity, COUNT(b.id) AS booked
          FROM events e
-         JOIN bookings b ON b.event_id = e.id AND b.archived_at IS NULL
+         JOIN bookings b ON b.event_id = e.id AND b.archived_at IS NULL AND b.waitlisted_at IS NULL
         GROUP BY e.id
        HAVING COUNT(b.id) > e.capacity
         ORDER BY e.id`,

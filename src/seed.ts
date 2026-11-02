@@ -96,7 +96,7 @@ interface EventState {
   count: number;
 }
 
-type BookingDraft = Omit<BookingRow, "id" | "archived_at" | "archive_reason">;
+type BookingDraft = Omit<BookingRow, "id" | "archived_at" | "archive_reason" | "waitlisted_at">;
 
 export function generateTimeSlots(start = "10:00", count = SLOT_COUNT, stepMinutes = SLOT_MINUTES): string[] {
   const [h, m] = start.split(":").map(Number);
@@ -268,7 +268,7 @@ export function generateSeedData(options: { now: Date; rngSeed?: number; clean?:
   // Number bookings in the order they were made, so the injected errors aren't simply the last ids.
   const bookings: BookingRow[] = [...drafts]
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
-    .map((b, i) => ({ id: i + 1, ...b, archived_at: null, archive_reason: null }));
+    .map((b, i) => ({ id: i + 1, ...b, archived_at: null, archive_reason: null, waitlisted_at: null }));
 
   const events = states.map((s) => s.event);
   const past = clean ? 0 : ERROR_PLAN.pastEventBookings.reduce((a, b) => a + b, 0);
@@ -321,7 +321,7 @@ export function seedDatabase(db: Db, data: SeedData): void {
     );
     const insertCustomer = db.prepare("INSERT INTO customers (id, name, email, phone) VALUES (@id, @name, @email, @phone)");
     const insertBooking = db.prepare(
-      "INSERT INTO bookings (id, event_id, customer_id, slot, created_at, archived_at, archive_reason) VALUES (@id, @event_id, @customer_id, @slot, @created_at, @archived_at, @archive_reason)",
+      "INSERT INTO bookings (id, event_id, customer_id, slot, created_at, archived_at, archive_reason, waitlisted_at) VALUES (@id, @event_id, @customer_id, @slot, @created_at, @archived_at, @archive_reason, @waitlisted_at)",
     );
     for (const e of data.events) insertEvent.run(e);
     for (const c of data.customers) insertCustomer.run(c);

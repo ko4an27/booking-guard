@@ -35,9 +35,11 @@ export interface BookingRow {
   /** When a fix archived this booking; null = active. Bookings are archived, never deleted. */
   archived_at: string | null;
   archive_reason: ArchiveReason | null;
+  /** When a fix put this booking on the waitlist (no place found); null = not waitlisted. */
+  waitlisted_at: string | null;
 }
 
-export const ARCHIVE_REASONS = ["duplicate", "past_event", "cancelled_event", "overbooked"] as const;
+export const ARCHIVE_REASONS = ["duplicate", "past_event", "cancelled_event"] as const;
 export type ArchiveReason = (typeof ARCHIVE_REASONS)[number];
 
 export interface AuditLogRow {
@@ -76,9 +78,12 @@ CREATE TABLE IF NOT EXISTS bookings (
   slot        TEXT    NOT NULL CHECK (slot GLOB '[0-2][0-9]:[0-5][0-9]'),
   created_at  TEXT    NOT NULL,
   archived_at    TEXT,
-  archive_reason TEXT CHECK (archive_reason IN ('duplicate', 'past_event', 'cancelled_event', 'overbooked')),
+  archive_reason TEXT CHECK (archive_reason IN ('duplicate', 'past_event', 'cancelled_event')),
+  waitlisted_at  TEXT,
   -- Both set (archived) or both empty (active): an archived booking always says why.
-  CHECK ((archived_at IS NULL) = (archive_reason IS NULL))
+  CHECK ((archived_at IS NULL) = (archive_reason IS NULL)),
+  -- A booking is active, archived OR waitlisted — never archived and waitlisted at once.
+  CHECK (archived_at IS NULL OR waitlisted_at IS NULL)
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_bookings_event    ON bookings(event_id);

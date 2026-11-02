@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "booking-guard": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["src/mcp-server.ts"]
+    }
+  }
+}

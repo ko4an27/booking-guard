@@ -1,0 +1,6 @@
+{
+  "permissions": {
+    "ask": ["mcp__booking-guard__apply_fix"],
+    "disableBypassPermissionsMode": "disable"
+  }
+}
