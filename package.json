@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "seed": "node src/seed-cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

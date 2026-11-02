@@ -1,0 +1,35 @@
+{
+  "rngSeed": 20261102,
+  "totals": {
+    "cities": 8,
+    "events": 40,
+    "customers": 331,
+    "bookings": 513
+  },
+  "errors": {
+    "duplicateBookings": {
+      "count": 12,
+      "counts": "(customer, event) pairs with more than one booking"
+    },
+    "doubleBookedSlots": {
+      "count": 9,
+      "counts": "(event, slot) pairs with more than one booking"
+    },
+    "pastOrCancelledEvents": {
+      "count": 15,
+      "past": 7,
+      "cancelled": 8,
+      "counts": "bookings on events dated before today or with status 'cancelled'"
+    },
+    "badContacts": {
+      "count": 11,
+      "counts": "customers whose email or phone is missing, empty or malformed",
+      "emailRule": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+      "phoneRule": "after removing spaces: ^\\+358\\d{7,10}$"
+    },
+    "overbookedEvents": {
+      "count": 4,
+      "counts": "events with more bookings than capacity"
+    }
+  }
+}
