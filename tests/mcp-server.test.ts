@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -32,6 +32,7 @@ let humanMessages: string[];
 let onDisplay: Set<string>;
 /** The raw text of every tool result the AI received. */
 let toolResults: string[];
+let draftsDir: string;
 
 beforeEach(async () => {
   db = openDb(":memory:");
@@ -39,6 +40,7 @@ beforeEach(async () => {
   humanMessages = [];
   onDisplay = new Set();
   toolResults = [];
+  draftsDir = mkdtempSync(join(tmpdir(), "bg-mcp-drafts-"));
   clock = Date.parse(`${TODAY}T12:00:00Z`);
   const server = createBookingGuardServer({
     db,
@@ -52,6 +54,7 @@ beforeEach(async () => {
     secret: new TextEncoder().encode("test-secret"),
     today: () => TODAY,
     now: () => clock,
+    draftsDir,
   });
   // Two transports wired to each other in memory: the same protocol Claude Code speaks over stdio.
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -62,6 +65,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await client.close();
   db.close();
+  rmSync(draftsDir, { recursive: true, force: true });
 });
 
 async function call(name: string, args: Json = {}): Promise<Json> {
@@ -95,9 +99,9 @@ const firstId = (type: Issue["type"]) => {
 const allCodesShown = () => humanMessages.map((m) => m.match(/Confirmation code: ([0-9A-F]{6})/)?.[1]).filter((c): c is string => !!c);
 
 describe("tools", () => {
-  it("offers list_issues, propose_fix and apply_fix; only apply_fix is marked destructive", async () => {
+  it("offers list_issues, propose_fix, apply_fix and draft_messages; only apply_fix is marked destructive", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["apply_fix", "list_issues", "propose_fix"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["apply_fix", "draft_messages", "list_issues", "propose_fix"]);
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(byName["apply_fix"]?.annotations?.destructiveHint).toBe(true);
     expect(byName["list_issues"]?.annotations?.readOnlyHint).toBe(true);
@@ -277,6 +281,10 @@ describe("what the AI sees", () => {
     }
     const last = ids.at(-1) as string;
     await call("apply_fix", { proposalId: last, confirmationCode: codeFor(last), dryRun: false });
+    // A fix that affects a customer, then the drafts.
+    const move = (await call("propose_fix", { issueId: firstId("double_booked_slot") }))["proposalId"] as string;
+    await call("apply_fix", { proposalId: move, confirmationCode: codeFor(move), dryRun: false });
+    await call("draft_messages");
   }
 
   it("the confirmation code never appears in any tool result", async () => {
@@ -410,5 +418,19 @@ describe("apply_fix trusts only the proposal stored on the server", () => {
     const wasBooking1InFix = (res["changes"] as Array<{ bookingId: number }>).some((c) => c.bookingId === 1);
     if (!wasBooking1InFix) expect(after.archived_at).toBeNull();
     expect(snapshot()).not.toEqual(before);
+  });
+});
+
+describe("draft_messages", () => {
+  it("writes one draft per affected customer, nothing on a second run, and says nothing was sent", async () => {
+    expect(await call("draft_messages")).toMatchObject({ created: [], alreadyDrafted: 0 });
+    const id = (await call("propose_fix", { issueId: firstId("double_booked_slot") }))["proposalId"] as string;
+    await call("apply_fix", { proposalId: id, confirmationCode: codeFor(id), dryRun: false });
+    const first = await call("draft_messages");
+    expect(first["created"]).toHaveLength(1);
+    expect(first["note"]).toBe("Drafts are files only. Nothing was sent.");
+    expect(readdirSync(draftsDir)).toHaveLength(1);
+    expect(await call("draft_messages")).toMatchObject({ created: [], alreadyDrafted: 1 });
+    expect(readdirSync(draftsDir)).toHaveLength(1);
   });
 });

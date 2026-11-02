@@ -8,7 +8,7 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - [x] Tue 3.11 — 5 SQL checks + tests (each finds exactly the seeded errors, no false positives)
 - [x] Tue 3.11 — `proposeFix` / `applyFix` with transaction, rollback test, dry-run, confirmation code
 - [x] Wed 4.11 — MCP server: `list_issues`, `propose_fix`, `apply_fix`; connect to Claude Code
-- [ ] Wed 4.11 — customer message drafts (FI/EN, files only) + skill "morning booking check"
+- [x] Wed 4.11 — customer message drafts (FI/EN, files only) + skill "morning booking check"
 - [ ] Thu 5.11 — README ("How it stays reliable"), GitHub Actions CI, GIF demo
 - [ ] Thu 5.11 — CV + cover letter, submit application
 
@@ -21,11 +21,12 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 - Fix decisions of 4.11: confirmation code is an HMAC (secret key in memory) of the exact proposal and is no longer part of the proposal or the audit_log; overbooked customers move to the next event in the same city with room, otherwise waitlist (`bookings.waitlisted_at`); moved/waitlisted customers are flagged `needsMessage` in audit_log. 119 tests passing.
 - MCP server (`src/mcp-server.ts`, `npm run mcp`, `.mcp.json`): `list_issues` (optional city), `propose_fix`, `apply_fix`. Proposals are stored on the server and referenced by id; each has its own key, expires after 15 min, is single-use, is replaced by a newer proposal for the same issue, and locks after 3 wrong codes. Codes are shown to the human (/dev/tty, else stderr), never in a tool result. All results masked plus a final scrub. `apply_fix` is an `ask` rule in `.claude/settings.json`. 141 tests passing.
 - Without a terminal (Claude Code on the web) the code goes to `pending/CONFIRM-<proposalId>.txt` (git-ignored, owner-only) and is removed when the proposal is used, replaced, expired or locked. README states the safety model honestly. Project `.mcp.json` loads in the cloud session (`list_issues` for Turku works). 147 tests passing.
+- Message drafts (`src/messages.ts`, MCP tool `draft_messages`): one FI + EN draft per affected customer in `drafts/`, first name only, masked contact data in the header, nothing sent. `message_drafts` table makes re-runs create nothing new. Skill `.claude/skills/morning-booking-check/SKILL.md`. Demo on Turku: 3 duplicates proposed, stopped before apply. 161 tests passing.
 
 ## Next
-- Merge the "Fix decisions" PR (#5), then the MCP PR. Re-run `npm run seed` afterwards.
-- Try it in Claude Code: approve the project MCP server, check where the confirmation code appears.
-- Wed 4.11: message drafts for audit_log rows with `needsMessage: true`.
+- Merge PR #7 (pending-file fallback, missed from #6), then the drafts + skill PR. Re-run `npm run seed` afterwards (new `message_drafts` table).
+- Start a NEW session after merging, so its MCP server runs the new code; run the morning check there with real approvals.
+- Thu 5.11: README ("How it stays reliable"), GitHub Actions CI, GIF demo.
 
 ## Decisions
 - zod is OK (needed by the MCP SDK).
@@ -39,6 +40,7 @@ Deadline: Kultakiertue application — submit Thu 5.11 (Fri 6.11 = buffer)
 
 ## Open questions
 - The pending/ file is readable by an AI with shell access: the code is defense in depth; the permission prompt on `apply_fix` (and Bash on prompt) is the hard guarantee. Documented in README.
-- An already running MCP server keeps its old code until the session restarts it.
+- An already running MCP server keeps its old code until the session restarts it. This session's server is from before the pending-file fallback and `draft_messages`.
+- Drafts say "reply to this message" and sign as "Asiakaspalvelu / Customer service". Add a real contact line (phone hours, address of the event venue)? The schema only has the city, no venue.
 - Does `disableBypassPermissionsMode` work from project settings? The docs don't say; the `ask` rule itself is documented to apply even over a user-level `allow`.
 - Seed dates are relative to the day you run it: re-run `npm run seed` before a demo so "future" events are still in the future.

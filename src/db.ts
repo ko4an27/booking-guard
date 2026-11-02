@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS audit_log (
   action  TEXT NOT NULL,
   details TEXT NOT NULL CHECK (json_valid(details))
 ) STRICT;
+
+-- Which audit_log changes already have a message draft, so a change is never drafted twice.
+CREATE TABLE IF NOT EXISTS message_drafts (
+  id           INTEGER PRIMARY KEY,
+  audit_log_id INTEGER NOT NULL UNIQUE REFERENCES audit_log(id),
+  customer_id  INTEGER NOT NULL REFERENCES customers(id),
+  file         TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+) STRICT;
 `;
 
 /** Opens (or creates) a database file. Foreign keys are off by default in SQLite, so we turn them on. */
@@ -112,6 +121,7 @@ export function createSchema(db: Db): void {
 /** Drops all tables. Children (bookings) go before parents so foreign keys never block the drop. */
 export function dropSchema(db: Db): void {
   db.exec(`
+    DROP TABLE IF EXISTS message_drafts;
     DROP TABLE IF EXISTS bookings;
     DROP TABLE IF EXISTS customers;
     DROP TABLE IF EXISTS events;
