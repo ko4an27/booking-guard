@@ -140,3 +140,11 @@ describe("seeded errors match tests/expected.json", () => {
     }
   });
 });
+
+describe("generateSeedData({ clean: true })", () => {
+  it("expects zero errors and has no bad contacts", () => {
+    const data = generateSeedData({ now: NOW, clean: true });
+    for (const e of Object.values(data.expected.errors)) expect(e.count).toBe(0);
+    expect(data.customers.filter((c) => !validEmail(c.email) || !validPhone(c.phone))).toEqual([]);
+  });
+});
